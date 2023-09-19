@@ -95,3 +95,35 @@ sys_uptime(void)
   release(&tickslock);
   return xticks;
 }
+
+uint64
+sys_trace(void)
+{
+  int m;
+  if(argint(0, &m) < 0)
+    return -1;
+  //printf("sys_trace: m -> %d\n", m);
+  
+  int pre_m = myproc() -> trace_mask;
+  myproc() -> trace_mask = pre_m | m;
+  return 0;
+}
+
+uint64
+sys_sysinfo(void)
+{
+  uint64 p;
+  if(argaddr(0, &p) < 0)
+    return -1;
+  
+  //printf("get p -> %x\n", p);
+  uint64 n_free = count_free();
+  //printf("count_free get %d\n", n_free);
+  uint64 n_proc = count_proc();
+  //printf("count_proc get %d\n", n_proc);
+  if(copyout(myproc()->pagetable, p, (char *)&n_free, sizeof(n_free)) < 0)
+      return -1;
+  if(copyout(myproc()->pagetable, p + sizeof(uint64), (char *)&n_proc, sizeof(n_proc)) < 0)
+      return -1;
+  return 0;
+}
