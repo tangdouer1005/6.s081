@@ -81,6 +81,45 @@ int
 sys_pgaccess(void)
 {
   // lab pgtbl: your code here.
+  int len;
+  uint64 va, mask;
+  if(argaddr(0, &va) < 0)
+    return -1;
+  if(argint(1, &len) < 0)
+    return -1;
+  if(argaddr(2, &mask) < 0)
+    return -1;
+  // if((va % PGSIZE) != 0){
+  //   printf("sys_pgaccess: va %p\n", va);
+  //   return -1;
+  // }
+  va = va - (va % PGSIZE);
+  if(len < 0){
+    printf("sys_pgaccess: len %d\n", len);
+    return -1;
+  }
+  //printf("va -> %p, len -> %d, mask -> %p\n", va, len, mask);
+  int buffer_len = (len % 8) ? (len / 8 + 1) : (len / 8);
+  char buffer[1024];
+  if(buffer_len > 1024){
+    panic("sys_pgaccess : buffer_len too large\n");
+  }
+  memset(buffer, 0, buffer_len);
+  //vmprint(myproc() -> pagetable);
+  for(int i = 0; i < len; i ++){
+    pte_t * pte = walk(myproc() -> pagetable, va + i * PGSIZE, 0);
+    if(pte != 0 && (*pte) & PTE_A){
+      (*pte) -= PTE_A;
+      int n = len - i - 1;
+      //printf("n -> %d\n", n);
+      int idx = buffer_len - 1 - n / 8;
+      buffer[idx] += (1 << (7 - n % 8));
+    }
+  }
+  if(copyout(myproc() -> pagetable, mask, buffer, buffer_len) < 0){
+    return -1;
+  }
+
   return 0;
 }
 #endif
