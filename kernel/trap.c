@@ -85,7 +85,7 @@ usertrap(void)
         p -> alarm.mytick = 0;
         //p -> copy_context = p -> context;
 
-        memmove(&(p->copy_trapframe), p -> trapframe, sizeof(struct trapframe));
+        memmove((p->copy_trapframe), p -> trapframe, sizeof(struct trapframe));
         p->trapframe->epc = p->alarm.handler;
         p -> alarm.is = 1;
       }

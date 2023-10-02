@@ -114,7 +114,7 @@ uint64 sys_sigalarm(void){
 
 uint64 sys_sigreturn(void){
   //*(myproc() -> trapframe) = myproc() -> copy_trapframe;
-  memmove(myproc()->trapframe, &(myproc()->copy_trapframe), sizeof(struct trapframe));
+  memmove(myproc()->trapframe, (myproc()->copy_trapframe), sizeof(struct trapframe));
   //myproc()->context = myproc()->copy_context;
   myproc()->alarm.is = 0;
   return 0;

@@ -111,6 +111,6 @@ struct proc {
     uint64 handler;
     int is;
   }alarm;
-  struct trapframe copy_trapframe;
+  struct trapframe *copy_trapframe;
   //struct context copy_context;
 };

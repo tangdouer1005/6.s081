@@ -90,6 +90,7 @@ test1()
       break;
     foo(i, &j);
   }
+  printf("i -> %d j -> %d\n", i, j);
   if(count < 10){
     printf("\ntest1 failed: too few calls to the handler\n");
   } else if(i != j){
