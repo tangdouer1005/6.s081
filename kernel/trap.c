@@ -68,9 +68,47 @@ usertrap(void)
   } else if((which_dev = devintr()) != 0){
     // ok
   } else {
-    printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
-    printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
-    p->killed = 1;
+    // printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
+    // printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
+    uint64 va = PGROUNDDOWN(r_stval());
+    if(va >= MAXVA)
+      exit(-1);
+    pte_t *pte = walk(p -> pagetable, va, 0);
+    if(pte == 0){
+      exit(-1);
+      //printf("usertrap: pte = 0");
+    }
+    uint64 pa = PTE2PA(*pte);
+    uint flags = PTE_FLAGS(*pte);
+    if(r_scause() == 0xf && (flags & PTE_C)){
+      // printf("flag -> %p, pa -> %p\n", flags, pa);
+      // printf("GET_REFER_COUNT(pa) -> %d, idx -> %d\n", GET_REFER_COUNT(pa), GET_REFER_IDX(pa));
+      // printf("\n");
+      // for(unsigned long long i = 0; i < 7 * PGSIZE; i ++)
+      //   if(page_refer_count[i] > 0)
+      //     printf("%d ", page_refer_count[i]);
+      if(GET_REFER_COUNT(pa) > 1){
+        char *mem;
+        if((mem = kalloc()) == 0){
+          printf("usertrap: no memory for copy");
+          exit(-1);
+        }
+        flags |= PTE_W;
+        flags -= PTE_C;
+        memmove(mem, (char*)pa, PGSIZE);
+        uvmunmap(p -> pagetable, va, 1, 1);//do_free for sub refer count
+        if(mappages(p -> pagetable, va, PGSIZE, (uint64)mem, flags) != 0){
+          kfree(mem);
+          printf("usertrap: copy map fail");
+          exit(-1);
+        }
+      }else if(GET_REFER_COUNT(pa) == 1){
+        SET_FLAG(pte, PTE_W);
+        UNSET_FLAG(pte, PTE_C);
+      }else
+        panic("usertrap: GET_REFER_COUNT(pa) < 1");
+    }else
+      p->killed = 1;
   }
 
   if(p->killed)
@@ -130,6 +168,7 @@ usertrapret(void)
 
 // interrupts and exceptions from kernel code go here via kernelvec,
 // on whatever the current kernel stack is.
+extern pagetable_t kernel_pagetable;
 void 
 kerneltrap()
 {

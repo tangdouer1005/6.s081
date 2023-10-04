@@ -10,6 +10,7 @@
  * the kernel's page table.
  */
 pagetable_t kernel_pagetable;
+uint8* page_refer_count;
 
 extern char etext[];  // kernel.ld sets this to end of kernel code.
 
@@ -45,7 +46,15 @@ kvmmake(void)
 
   // map kernel stacks
   proc_mapstacks(kpgtbl);
-  
+  for(int i = 0; i < 7; i ++){
+    printf("%p\n", kalloc());
+  }
+  page_refer_count = (uint8*)kalloc();
+  printf("%p\n", page_refer_count);
+  memset(page_refer_count, 0, PGSIZE * 8);
+  for(int i = 0; i < 8; i ++){
+    printf("%d ", page_refer_count[i * PGSIZE]);
+  }
   return kpgtbl;
 }
 
@@ -303,7 +312,6 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
   pte_t *pte;
   uint64 pa, i;
   uint flags;
-  char *mem;
 
   for(i = 0; i < sz; i += PGSIZE){
     if((pte = walk(old, i, 0)) == 0)
@@ -312,12 +320,30 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
       panic("uvmcopy: page not present");
     pa = PTE2PA(*pte);
     flags = PTE_FLAGS(*pte);
-    if((mem = kalloc()) == 0)
+    if(flags & PTE_W){
+      flags |= PTE_C;
+      flags -= PTE_W;
+    }
+    if(mappages(new, i, PGSIZE, (uint64)pa, flags) != 0){
       goto err;
-    memmove(mem, (char*)pa, PGSIZE);
-    if(mappages(new, i, PGSIZE, (uint64)mem, flags) != 0){
-      kfree(mem);
-      goto err;
+    }
+    if(pa < PHYSTOP){
+      ADD_REFER_COUNT(pa);
+      //printf("\npa -> %p, reffercount -> %d, idx -> %d\n", pa, GET_REFER_COUNT(pa), GET_REFER_IDX(pa));
+      // printf("%d\n", 7 * PGSIZE);
+      // for(unsigned long long i = 0; i < 7 * PGSIZE; i ++)
+      //   if(page_refer_count[i] > 0)
+      //     printf("%d ", page_refer_count[i]);
+    }
+  }
+  for(i = 0; i < sz; i += PGSIZE){
+    if((pte = walk(old, i, 0)) == 0)
+      panic("uvmcopy: pte should exist");
+    if((*pte & PTE_V) == 0)
+      panic("uvmcopy: page not present");
+    if(PTE_FLAGS(*pte) & PTE_W){
+      SET_FLAG(pte, PTE_C);
+      UNSET_FLAG(pte, PTE_W);
     }
   }
   return 0;
@@ -350,9 +376,44 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
 
   while(len > 0){
     va0 = PGROUNDDOWN(dstva);
-    pa0 = walkaddr(pagetable, va0);
-    if(pa0 == 0)
+    if(va0 >= MAXVA){
+      printf("copyout: va0 >= MAXVA");
       return -1;
+    }
+    pte_t* pte = walk(pagetable, va0, 0);
+    if(pte == 0){
+      printf("copyout: pte = 0");
+      return -1;
+    }
+    pa0 = PTE2PA(*pte);
+    if(pa0 == 0){
+      printf("copyout -> pa0 = 0\n");
+      return -1;
+    }
+    uint flags = PTE_FLAGS(*pte);
+    if(flags & PTE_C){
+      if(GET_REFER_COUNT(pa0) > 1){
+        char *mem;
+        if((mem = kalloc()) == 0){
+          printf("copyout: no memory for copy");
+          return -1;
+        }
+        flags |= PTE_W;
+        flags -= PTE_C;
+        memmove(mem, (char*)pa0, PGSIZE);
+        uvmunmap(pagetable, va0, 1, 1);//do_free for sub refer count
+        if(mappages(pagetable, va0, PGSIZE, (uint64)mem, flags) != 0){
+          kfree(mem);
+          printf("copyout: copy map fail");
+          return -1;
+        }
+        pa0 = (uint64)mem;
+      }else if(GET_REFER_COUNT(pa0) == 1){
+        SET_FLAG(pte, PTE_W);
+        UNSET_FLAG(pte, PTE_C);
+      }else
+        panic("usertrap: GET_REFER_COUNT(pa) < 1");
+    }
     n = PGSIZE - (dstva - va0);
     if(n > len)
       n = len;

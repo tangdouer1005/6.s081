@@ -28,6 +28,8 @@ kinit()
 {
   initlock(&kmem.lock, "kmem");
   freerange(end, (void*)PHYSTOP);
+  // printf("%p %p\n\n", end, (void*)PHYSTOP);
+  // printf("kinit -> %p\n\n", kalloc());
 }
 
 void
@@ -44,12 +46,9 @@ freerange(void *pa_start, void *pa_end)
 // call to kalloc().  (The exception is when
 // initializing the allocator; see kinit above.)
 void
-kfree(void *pa)
+kfree_t(void *pa)
 {
   struct run *r;
-
-  if(((uint64)pa % PGSIZE) != 0 || (char*)pa < end || (uint64)pa >= PHYSTOP)
-    panic("kfree");
 
   // Fill with junk to catch dangling refs.
   memset(pa, 1, PGSIZE);
@@ -61,6 +60,24 @@ kfree(void *pa)
   kmem.freelist = r;
   release(&kmem.lock);
 }
+void
+kfree(void *pa)
+{
+  if(((uint64)pa % PGSIZE) != 0 || (char*)pa < end || (uint64)pa >= PHYSTOP)
+    panic("kfree");
+  if(page_refer_count == 0){
+    kfree_t(pa);
+    return;  
+  }
+  SUB_REFER_COUNT((uint64)pa);
+  // if(GET_REFER_COUNT((uint64)pa) == 0){
+  //   printf("kfree a REFER_COUNT is 0\n");
+  //   return;
+  // }
+  if(GET_REFER_COUNT((uint64)pa) <= 0)
+    kfree_t(pa);
+}
+
 
 // Allocate one 4096-byte page of physical memory.
 // Returns a pointer that the kernel can use.
@@ -76,7 +93,10 @@ kalloc(void)
     kmem.freelist = r->next;
   release(&kmem.lock);
 
-  if(r)
+  if(r){
+
+    ADD_REFER_COUNT((uint64)r);
     memset((char*)r, 5, PGSIZE); // fill with junk
+  }
   return (void*)r;
 }

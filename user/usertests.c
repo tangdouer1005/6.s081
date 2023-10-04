@@ -2740,6 +2740,7 @@ countfree()
 
       // modify the memory to make sure it's really allocated.
       *(char *)(a + 4096 - 1) = 1;
+      //printf("finish to modify\n");
 
       // report back one more page.
       if(write(fds[1], "x", 1) != 1){
@@ -2909,14 +2910,20 @@ main(int argc, char *argv[])
     }
   }
 
-  printf("usertests starting\n");
+  printf("usertests starting here\n");
   int free0 = countfree();
+  // int free0= 0;
+  printf("usertests fucking\n");
+
   int free1 = 0;
   int fail = 0;
   for (struct test *t = tests; t->s != 0; t++) {
     if((justone == 0) || strcmp(t->s, justone) == 0) {
-      if(!run(t->f, t->s))
+      if(!run(t->f, t->s)){
         fail = 1;
+        printf("\n\nfail to %s\n\n", t->s);
+      }
+      
     }
   }
 
