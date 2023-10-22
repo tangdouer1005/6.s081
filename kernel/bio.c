@@ -23,10 +23,17 @@
 #include "fs.h"
 #include "buf.h"
 
+#define HASHCOUNT 293
+
+struct hashentry{
+  struct buf head;
+  struct spinlock lock;
+};
 struct {
   struct spinlock lock;
   struct buf buf[NBUF];
-
+  int new;
+  struct hashentry hash[HASHCOUNT];
   // Linked list of all buffers, through prev/next.
   // Sorted by how recently the buffer was used.
   // head.next is most recent, head.prev is least.
@@ -39,16 +46,14 @@ binit(void)
   struct buf *b;
 
   initlock(&bcache.lock, "bcache");
-
-  // Create linked list of buffers
-  bcache.head.prev = &bcache.head;
-  bcache.head.next = &bcache.head;
+  bcache.new = 0;
+  for(int i = 0; i < HASHCOUNT; i ++){
+    initlock(&bcache.hash[i].lock, "bcache");
+    bcache.hash[i].head.prev = &bcache.hash[i].head;
+    bcache.hash[i].head.next = &bcache.hash[i].head;
+  }
   for(b = bcache.buf; b < bcache.buf+NBUF; b++){
-    b->next = bcache.head.next;
-    b->prev = &bcache.head;
     initsleeplock(&b->lock, "buffer");
-    bcache.head.next->prev = b;
-    bcache.head.next = b;
   }
 }
 
@@ -60,27 +65,81 @@ bget(uint dev, uint blockno)
 {
   struct buf *b;
 
-  acquire(&bcache.lock);
 
-  // Is the block already cached?
-  for(b = bcache.head.next; b != &bcache.head; b = b->next){
+  int key = blockno % HASHCOUNT;
+  acquire(&bcache.hash[key].lock);
+  for(b = bcache.hash[key].head.next; b != &bcache.hash[key].head; b = b->next){
     if(b->dev == dev && b->blockno == blockno){
       b->refcnt++;
-      release(&bcache.lock);
+      release(&bcache.hash[key].lock);
       acquiresleep(&b->lock);
       return b;
     }
   }
-
+  release(&bcache.hash[key].lock);
+  b = 0;
   // Not cached.
   // Recycle the least recently used (LRU) unused buffer.
-  for(b = bcache.head.prev; b != &bcache.head; b = b->prev){
-    if(b->refcnt == 0) {
+  if(bcache.new != NBUF){
+    acquire(&bcache.lock);
+    b = bcache.buf + bcache.new;
+    bcache.new ++;
+
+    b->dev = dev;
+    b->blockno = blockno;
+    b->valid = 0;
+    b->refcnt = 1;
+    acquire(&bcache.hash[key].lock);
+
+    b->next = bcache.hash[key].head.next;
+    b->prev = &bcache.hash[key].head;
+    bcache.hash[key].head.next->prev = b;
+    bcache.hash[key].head.next = b;
+
+    release(&bcache.hash[key].lock);
+
+    release(&bcache.lock);
+    acquiresleep(&b->lock);
+    return b;
+  }else{
+    uint mintick = ~0u;
+
+    struct spinlock* hashentrylock = 0;
+    for(int i = 0; i < HASHCOUNT; i ++){
+      acquire(&bcache.hash[i].lock);
+      for(struct buf *ib = bcache.hash[i].head.next; ib != &bcache.hash[i].head; ib = ib->next){
+        if(ib -> refcnt == 0 && (ib -> tick) <= mintick){
+          mintick = ib -> tick;
+          b = ib;
+          if(hashentrylock)
+            release(hashentrylock);
+          hashentrylock = &bcache.hash[i].lock;
+        }
+      }
+      if(hashentrylock != &bcache.hash[i].lock)
+        release(&bcache.hash[i].lock);
+    }
+    if(b){
       b->dev = dev;
       b->blockno = blockno;
       b->valid = 0;
       b->refcnt = 1;
-      release(&bcache.lock);
+
+      b->next->prev = b->prev;
+      b->prev->next = b->next;
+
+      if(hashentrylock)
+        release(hashentrylock);
+      else
+        panic("hashentrylock == 0");
+      
+      acquire(&bcache.hash[key].lock);
+      b->next = bcache.hash[key].head.next;
+      b->prev = &bcache.hash[key].head;
+      bcache.hash[key].head.next->prev = b;
+      bcache.hash[key].head.next = b;
+      release(&bcache.hash[key].lock);
+
       acquiresleep(&b->lock);
       return b;
     }
@@ -121,19 +180,13 @@ brelse(struct buf *b)
 
   releasesleep(&b->lock);
 
-  acquire(&bcache.lock);
+  int key = b ->blockno % HASHCOUNT;
+  acquire(&bcache.hash[key].lock);
   b->refcnt--;
-  if (b->refcnt == 0) {
-    // no one is waiting for it.
-    b->next->prev = b->prev;
-    b->prev->next = b->next;
-    b->next = bcache.head.next;
-    b->prev = &bcache.head;
-    bcache.head.next->prev = b;
-    bcache.head.next = b;
-  }
-  
-  release(&bcache.lock);
+  acquire(&tickslock);
+  b -> tick = ticks;
+  release(&tickslock);
+  release(&bcache.hash[key].lock);
 }
 
 void
