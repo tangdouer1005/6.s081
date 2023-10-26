@@ -5,6 +5,11 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
+#include "fs.h"
+#include "sleeplock.h"
+#include "file.h"
+#include "fcntl.h"
+
 
 struct cpu cpus[NCPU];
 
@@ -140,7 +145,9 @@ found:
   memset(&p->context, 0, sizeof(p->context));
   p->context.ra = (uint64)forkret;
   p->context.sp = p->kstack + PGSIZE;
-
+  for(int i = 0; i < 16; i ++)
+    p ->VMA[i].state = 0;
+  p ->mmp = 0x500000;
   return p;
 }
 
@@ -282,12 +289,34 @@ fork(void)
   }
 
   // Copy user memory from parent to child.
+  printf("p->sz -> %p\n", p->sz);
   if(uvmcopy(p->pagetable, np->pagetable, p->sz) < 0){
     freeproc(np);
     release(&np->lock);
     return -1;
   }
+
+  for(int i = 0; i < 16; i ++){
+    if(np->VMA[i].state)
+      np->VMA[i].file->ref++;
+    np->VMA[i] = p->VMA[i];
+  }
+  // pte_t *pte;
+  // uint64 pa;
+  // uint flags;
+  printf("p -> mmp -> %p\n", p -> mmp);
+  // for(int i = 0x500000; i < p -> mmp; i += PGSIZE){
+  //     // if((pte = walk(p->pagetable, i, 0)) == 0)
+  //     //   panic("uvmcopy: pte should exist");
+  //     // pa = PTE2PA(*pte);
+  //     // flags = PTE_FLAGS(*pte);
+  //     if(mappages(np->pagetable, i, PGSIZE, 0,  PTE_U | PTE_L | PTE_V) < 0){
+  //       panic("mappages(np->pagetable, i, PGSIZE, pa, flags) < 0");
+  //     }
+ 
+  //   }
   np->sz = p->sz;
+  np->mmp = p -> mmp;
 
   // copy saved user registers.
   *(np->trapframe) = *(p->trapframe);
@@ -343,6 +372,13 @@ exit(int status)
 
   if(p == initproc)
     panic("init exiting");
+
+  // for(int i = 0; i < 16; i ++){
+  //   if(p->VMA[i].state == 1){
+  //     munmap(p->VMA[i].va, p->VMA[i].len);
+  //   }
+  // }
+  
 
   // Close all open files.
   for(int fd = 0; fd < NOFILE; fd++){

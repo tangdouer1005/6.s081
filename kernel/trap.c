@@ -5,6 +5,10 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
+#include "fcntl.h"
+#include "fs.h"
+#include "sleeplock.h"
+#include "file.h"
 
 struct spinlock tickslock;
 uint ticks;
@@ -49,7 +53,11 @@ usertrap(void)
   
   // save user program counter.
   p->trapframe->epc = r_sepc();
-  
+  // uint64 va = PGROUNDDOWN(r_stval());
+  // pte_t *pte = walk(p -> pagetable, va, 0);
+  // if(!pte)
+  //   panic("pte = 0");
+  // uint flags = PTE_FLAGS(*pte);
   if(r_scause() == 8){
     // system call
 
@@ -67,6 +75,62 @@ usertrap(void)
     syscall();
   } else if((which_dev = devintr()) != 0){
     // ok
+  } else if(r_scause() == 0xd){
+
+    
+    // printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
+    // printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
+    struct vma* v = 0;
+    //printf("r_stval() -> %p\n", r_stval());
+    for(int i = 0; i < 16; i ++){
+      //printf("p->VMA[i].state -> %d, p->VMA[i].va -> %p, p->VMA[i].len -> %p\n", p->VMA[i].state, p->VMA[i].va, p->VMA[i].len);
+      if(p->VMA[i].state == 1 && p->VMA[i].va <= r_stval() && p->VMA[i].va + p->VMA[i].len > r_stval()){
+        v = &(p->VMA[i]);
+        break;
+      }
+    }
+    if(!v){
+      p->killed = 1;
+      exit(-1);
+    }
+    
+    uint64 va = 0;
+    for(int vai = v->va; vai < v->va + v->len; vai += PGSIZE){
+      if(r_stval() >= vai && r_stval() < vai + PGSIZE){
+        va = vai;
+        break;
+      }
+    }
+    if(va == 0)
+      panic("va == 0");
+    
+    struct inode* ip = v -> file -> ip;
+
+    int begin = v -> offset + r_stval() - v -> va;
+    int len = (v->len + v->offset < begin + PGSIZE) ? (v->len + v->offset - begin) : PGSIZE;
+    
+    void* ka = kalloc();
+    if(ka == 0)
+      panic("fail to kalloc");
+    memset(ka, 0, PGSIZE);
+    ilock(ip);
+    int retread = readi(ip, 0, (uint64)ka, begin, len);
+    //printf("begin -> %p, len -> %p, retread -> %p\n", begin, len, retread);
+    if(retread != len){}
+    iunlock(ip);
+    
+    int flag = PTE_U | PTE_V;
+    if(v->prot & PROT_READ)
+      flag |= PTE_R;
+    if(v->prot & PROT_WRITE)
+      flag |= PTE_W;
+    if(v->prot & PROT_EXEC)
+      flag |= PTE_X;
+    
+    //*pte = PA2PTE(ka) + flag;
+    if(mappages(p->pagetable, va, PGSIZE, (uint64)ka, flag) < 0){
+      panic("fail to mappages");
+    }
   } else {
     printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
     printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());

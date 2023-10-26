@@ -484,3 +484,122 @@ sys_pipe(void)
   }
   return 0;
 }
+// void *mmap(void *addr, int length, int prot, int flags, int fd, int offset);
+// int munmap(void *addr, int length);
+uint64
+sys_mmap(void){
+  uint64 addr;
+  struct file* file;
+  int len, prot, flags, offset;
+  
+  if(argaddr(0, &addr) < 0)
+    return ~0;
+  if(argint(1, &len) < 0)
+    return ~0;
+  if(argint(2, &prot) < 0)
+    return ~0;
+  if(argint(3, &flags) < 0)
+    return ~0;
+  if(argfd(4, 0, &file) < 0)
+    return -1;
+  if(argint(5, &offset) < 0)
+    return ~0;
+
+  if((!file -> readable) && (prot & PROT_READ) && (flags & MAP_SHARED))
+    return ~0;
+  if((!file -> writable) && (prot & PROT_WRITE) && (flags & MAP_SHARED))
+    return ~0;
+
+  uint64 oldsz, newsz, i;
+  struct proc *p = myproc();
+  // printf("addr -> %p\nlen -> %d\n",addr, len);
+  // printf("p->sz -> %d\n",p -> sz);
+
+  oldsz = p->mmp;
+  newsz = oldsz + len;
+  for(i = oldsz ;i < newsz; i += PGSIZE){
+    // printf("mappages i -> %p\n", i);
+    // printf("walk i -> %p\n", walkaddr(p->pagetable, i));
+    // if(mappages(p->pagetable, i, PGSIZE, 0, PTE_U | PTE_L | PTE_V) < 0){
+    //   return ~0;
+    //}
+  }
+  p->mmp = i;
+  struct vma* v = 0;
+  for(int i = 0; i < 16; i ++){
+    if(p->VMA[i].state == 0){
+      v = &(p->VMA[i]);
+      v -> state = 1;
+      break;
+    }
+  }
+  if(!v)
+    return ~0;
+  v->va = oldsz;
+  v->file = file;
+  v->flags = flags;
+  v->len = len;
+  v->offset = offset;
+  v->prot = prot;
+
+  v->file->ref++;
+  //printf("oldsz -> %p\n",oldsz);
+  return oldsz;
+}
+
+uint64
+sys_munmap(void){
+  uint64 addr;
+  int len;
+  
+  if(argaddr(0, &addr) < 0)
+    return -1;
+  if(argint(1, &len) < 0)
+    return -1;
+  //printf("addr -> %p, len -> %d\n", addr, len);
+  struct proc *p = myproc();
+  struct vma* v = 0;
+  for(int i = 0; i < 16; i ++){
+    if(p->VMA[i].state == 1 && p->VMA[i].va == addr){
+      v = &(p->VMA[i]);
+      break;
+    }
+  }
+  if(!v){
+    printf("v == 0\n");
+    return -1;
+  }
+
+  
+  for(int i = 0; i < len; i += PGSIZE){
+    uint64 pa = walkaddr(p->pagetable, addr + i);
+    //printf("pa -> %p\n", pa);
+    
+    if(pa){
+      if(v->flags & MAP_SHARED){
+        begin_op();
+        ilock(v->file->ip);
+        writei(v->file->ip, 0, pa, v->offset + i, PGSIZE);
+        iunlock(v->file->ip);
+        end_op();
+      }
+      kfree((void *)pa);    
+      uvmunmap(p->pagetable, addr + i, 1, 0);
+    }
+    //printf("i -> %d, addr -> %p, i + addr -> %p\n", i, addr, i + addr);
+    //printf("i -> %d, addr + i * PGSIZE -> %p\n", i, addr + i * PGSIZE);
+
+  }
+  //printf("write back\n");
+  if(v->len > len){
+    v->offset += len;
+    v->va += len;
+    v->len -= len;
+  }else if(v->len == len){
+    v->state = 0;
+    v->file->ref --;
+  }else
+    panic("len > v -> len");
+  //printf("end\n");
+  return 0;
+}

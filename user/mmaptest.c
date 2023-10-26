@@ -36,6 +36,9 @@ err(char *why)
 void
 _v1(char *p)
 {
+  // printf("p -> %p\n", p);
+  // printf("p[0] -> %c, p[1] -> %c, \n", p[0], p[1]);
+  // printf("pagefaultfinish\n");
   int i;
   for (i = 0; i < PGSIZE*2; i++) {
     if (i < PGSIZE + (PGSIZE/2)) {
@@ -110,9 +113,12 @@ mmap_test(void)
   // of the file to be mapped. the last argument is the starting
   // offset in the file.
   //
+  //printf("begin map\n");
   char *p = mmap(0, PGSIZE*2, PROT_READ, MAP_PRIVATE, fd, 0);
+  //printf("end map\n");
   if (p == MAP_FAILED)
     err("mmap (1)");
+  printf("p -> %p\n", p);
   _v1(p);
   if (munmap(p, PGSIZE*2) == -1)
     err("munmap (1)");
